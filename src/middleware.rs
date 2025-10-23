@@ -4,13 +4,11 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
-    RequestPartsExt,
 };
 use std::env;
 
-/// Header custom: X-API-Key
 #[derive(Debug)]
-pub struct ApiKey(String);
+pub struct ApiKey(pub String);  // ← Campo público
 
 #[async_trait]
 impl<S> FromRequestParts<S> for ApiKey
@@ -29,7 +27,7 @@ where
             })?;
 
         let expected_key = env::var("API_KEY")
-            .unwrap_or_else(|_| "dev-secret-key-123".to_string());
+            .expect("API_KEY must be set in Shuttle secrets");
 
         if api_key == expected_key {
             Ok(ApiKey(api_key.to_string()))
