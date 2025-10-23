@@ -3,7 +3,6 @@ name = "proof_of_prime"
 version = "0.1.0"
 edition = "2021"
 
-# Shuttle precisa de um entrypoint assíncrono
 [dependencies]
 shuttle-runtime = "0.50.0"
 shuttle-axum = "0.50.0"
@@ -17,3 +16,8 @@ num-primes = "0.3"
 lazy_static = "1.4"
 log = "0.4"
 env_logger = "0.10"
+
+[[bin]]
+name = "proof_of_prime"
+path = "src/main.rs"
+
