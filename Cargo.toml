@@ -1,10 +1,19 @@
 [package]
-name = "axum-hello-world"
+name = "proof_of_prime"
 version = "0.1.0"
 edition = "2021"
 
+# Shuttle precisa de um entrypoint assíncrono
 [dependencies]
-axum = "0.8"
-shuttle-axum = "0.57.0"
-shuttle-runtime = "0.57.0"
-tokio = "1.28.2"
+shuttle-runtime = "0.50.0"
+shuttle-axum = "0.50.0"
+axum = "0.7"
+tokio = { version = "1.37", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+num = "0.4"
+num-primes = "0.3"
+lazy_static = "1.4"
+log = "0.4"
+env_logger = "0.10"
