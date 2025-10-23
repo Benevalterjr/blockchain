@@ -1,15 +1,29 @@
 use axum::{routing::get, Router, Json};
 use serde::{Deserialize, Serialize};
 use shuttle_axum::ShuttleAxum;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicU64, AtomicU32, Ordering}};
 use rand::Rng;
 use std::time::Instant;
 use tokio::task;
 use tokio::sync::mpsc;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use num::Integer;
+use lazy_static::lazy_static;
+use log::{info, debug};
+use env_logger;
 
 // ----------------------
-// Estrutura de bloco
+// Lazy Static
+// ----------------------
+lazy_static! {
+    static ref N_LIMIT: AtomicU64 = AtomicU64::new(1000);
+    static ref MIN_DIGITS: AtomicU32 = AtomicU32::new(7);
+    static ref MIN_PROB: AtomicU64 = AtomicU64::new(100); // 0.01
+}
+
+const TARGET_TIME: f64 = 10.0;
+
+// ----------------------
+// Block
 // ----------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Block {
@@ -24,7 +38,7 @@ struct Block {
 }
 
 // ----------------------
-// Estatísticas de mineração
+// Stats
 // ----------------------
 #[derive(Debug, Clone, Serialize)]
 struct MiningStats {
@@ -36,24 +50,7 @@ struct MiningStats {
 }
 
 // ----------------------
-// Estado global (com dificuldade dinâmica)
-// ----------------------
-struct ChainState {
-    chain: Vec<Block>,
-    n_limit: u64,
-    min_digits: u32,
-    target_time: f64,
-    min_prob: f64,
-}
-
-static N_LIMIT: AtomicU64 = AtomicU64::new(1000);
-static MIN_DIGITS: AtomicU32 = AtomicU32::new(7);
-static MIN_PROB: AtomicU64 = AtomicU64::new(100); // 0.01 = 1/100
-
-const SMALL_PRIMES: [u64; 15] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-
-// ----------------------
-// Funções de primalidade
+// Miller-Rabin
 // ----------------------
 fn miller_rabin(n: u64, k: u32) -> bool {
     if n <= 1 { return false; }
@@ -71,14 +68,10 @@ fn miller_rabin(n: u64, k: u32) -> bool {
     'outer: for _ in 0..k {
         let a = rng.gen_range(2..n - 1);
         let mut x = mod_pow(a, d, n);
-        if x == 1 || x == n - 1 {
-            continue;
-        }
+        if x == 1 || x == n - 1 { continue; }
         for _ in 0..r - 1 {
             x = mod_pow(x, 2, n);
-            if x == n - 1 {
-                continue 'outer;
-            }
+            if x == n - 1 { continue 'outer; }
         }
         return false;
     }
@@ -89,9 +82,7 @@ fn mod_pow(mut base: u64, mut exp: u64, modu: u64) -> u64 {
     let mut result = 1;
     base %= modu;
     while exp > 0 {
-        if exp % 2 == 1 {
-            result = (result * base) % modu;
-        }
+        if exp % 2 == 1 { result = (result * base) % modu; }
         base = (base * base) % modu;
         exp /= 2;
     }
@@ -99,7 +90,7 @@ fn mod_pow(mut base: u64, mut exp: u64, modu: u64) -> u64 {
 }
 
 // ----------------------
-// Heurística 1/ln(N)
+// Heurística
 // ----------------------
 fn prime_heuristic(n: u64, min_prob: f64) -> bool {
     if n < 2 { return false; }
@@ -108,21 +99,7 @@ fn prime_heuristic(n: u64, min_prob: f64) -> bool {
 }
 
 // ----------------------
-// GCD rejeição
-// ----------------------
-fn gcd(a: u64, b: u64) -> u64 {
-    let mut a = a;
-    let mut b = b;
-    while b != 0 {
-        let t = b;
-        b = a % b;
-        a = t;
-    }
-    a
-}
-
-// ----------------------
-// Minerador individual (com stats)
+// Minerador
 // ----------------------
 fn mine_worker(prev: &Block) -> (Block, MiningStats) {
     let mut rng = rand::thread_rng();
@@ -146,7 +123,7 @@ fn mine_worker(prev: &Block) -> (Block, MiningStats) {
         let c = rng.gen_range(10_u64.pow(min_digits - 1)..10_u64.pow(min_digits));
         let d = rng.gen_range(1..=n_limit);
 
-        if gcd(a, b) != 1 || gcd(c, d) != 1 {
+        if a.gcd(&b) != 1 || c.gcd(&d) != 1 {
             stats.gcd_rejected += 1;
             continue;
         }
@@ -161,16 +138,17 @@ fn mine_worker(prev: &Block) -> (Block, MiningStats) {
         if miller_rabin(n, 12) {
             let hash = format!("{:x}", n ^ prev.prime);
             stats.probability = 1.0 / (n as f64).ln();
-            return (
-                Block {
-                    index: prev.index + 1,
-                    prev_hash: prev.hash.clone(),
-                    prime: n,
-                    a, b, c, d,
-                    hash,
-                },
-                stats,
-            );
+
+            let block = Block {
+                index: prev.index + 1,
+                prev_hash: prev.hash.clone(),
+                prime: n,
+                a, b, c, d,
+                hash,
+            };
+
+            info!("Bloco minerado! Primo: {} ({} dígitos)", n, n.to_string().len());
+            return (block, stats);
         }
         stats.miller_rabin_rejected += 1;
     }
@@ -187,26 +165,27 @@ async fn mine_block_parallel(prev: Block, workers: usize) -> (Block, MiningStats
         let tx = tx.clone();
         let prev = prev.clone();
         task::spawn_blocking(move || {
-            let (block, stats) = mine_worker(&prev);
-            let _ = tx.blocking_send((block, stats));
+            let result = mine_worker(&prev);
+            let _ = tx.blocking_send(result);
         });
     }
 
-    rx.recv().await.expect("Nenhum bloco minerado")
+    rx.recv().await.expect("Falha na mineração")
 }
 
 // ----------------------
 // Ajuste de dificuldade
 // ----------------------
 fn adjust_difficulty(duration: f64) {
-    let target = 10.0;
-    if duration < target * 0.6 {
+    if duration < TARGET_TIME * 0.6 {
         N_LIMIT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some((x as f64 * 1.5) as u64)).ok();
         MIN_DIGITS.fetch_add(1, Ordering::Relaxed);
         MIN_PROB.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some((x as f64 * 1.2).min(1000.0) as u64)).ok();
-    } else if duration > target * 1.4 {
-        N_LIMIT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some((x as f64 * 0.7).max(100) as u64)).ok();
+        info!("Dificuldade aumentada! n_limit: {}", N_LIMIT.load(Ordering::Relaxed));
+    } else if duration > TARGET_TIME * 1.4 {
+        N_LIMIT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some((x as f64 * 0.7).max(100.0) as u64)).ok();
         MIN_PROB.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| Some((x as f64 * 0.8).max(50.0) as u64)).ok();
+        info!("Dificuldade reduzida! n_limit: {}", N_LIMIT.load(Ordering::Relaxed));
     }
 }
 
@@ -215,6 +194,8 @@ fn adjust_difficulty(duration: f64) {
 // ----------------------
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
+    env_logger::init();
+
     let genesis = Block {
         index: 0,
         prev_hash: "0".into(),
@@ -223,24 +204,17 @@ async fn axum() -> ShuttleAxum {
         hash: "genesis".into(),
     };
 
-    let state = Arc::new(Mutex::new(ChainState {
-        chain: vec![genesis],
-        n_limit: 1000,
-        min_digits: 7,
-        target_time: 10.0,
-        min_prob: 0.01,
-    }));
+    let chain = Arc::new(Mutex::new(vec![genesis]));
 
     let router = Router::new()
-        .route("/", get(|| async { "Proof-of-Prime Blockchain Node (Python-level features)" }))
+        .route("/", get(|| async { "Proof-of-Prime Blockchain Node" }))
 
-        // ---------- /mine ----------
         .route("/mine", get({
-            let state = state.clone();
+            let chain = chain.clone();
             move || async move {
                 let last_block = {
-                    let s = state.lock().unwrap();
-                    s.chain.last().unwrap().clone()
+                    let guard = chain.lock().unwrap();
+                    guard.last().unwrap().clone()
                 };
 
                 let start = Instant::now();
@@ -248,20 +222,20 @@ async fn axum() -> ShuttleAxum {
                 let duration = start.elapsed().as_secs_f64();
 
                 {
-                    let mut s = state.lock().unwrap();
-                    s.chain.push(new_block.clone());
+                    let mut guard = chain.lock().unwrap();
+                    guard.push(new_block.clone());
                 }
 
                 adjust_difficulty(duration);
+
+                let height = chain.lock().unwrap().len();
 
                 Json(serde_json::json!({
                     "index": new_block.index,
                     "prime": new_block.prime,
                     "digits": new_block.prime.to_string().len(),
                     "duration": format!("{:.3}s", duration),
-                    "height": {
-                        let s::std::sync::MutexGuard::<'_>, _>::map(state.lock().unwrap(), |s| s.chain.len())
-                    },
+                    "height": height,
                     "stats": {
                         "candidates": stats.candidates,
                         "gcd_rejected": stats.gcd_rejected,
@@ -278,15 +252,11 @@ async fn axum() -> ShuttleAxum {
             }
         }))
 
-        // ---------- /chain ----------
         .route("/chain", get({
-            let state = state.clone();
+            let chain = chain.clone();
             move || async move {
-                let chain = {
-                    let s = state.lock().unwrap();
-                    s.chain.clone()
-                };
-                Json(chain)
+                let guard = chain.lock().unwrap();
+                Json(guard.clone())
             }
         }));
 
