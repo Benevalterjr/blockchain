@@ -17,6 +17,7 @@ lazy_static = "1.4"
 log = "0.4"
 env_logger = "0.10"
 
+# 👇 Esta seção indica o binário que o Shuttle deve compilar
 [[bin]]
 name = "proof_of_prime"
 path = "src/main.rs"
