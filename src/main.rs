@@ -18,7 +18,7 @@ use middleware::ApiKey;
 lazy_static! {
     static ref N_LIMIT: AtomicU64 = AtomicU64::new(1000);
     static ref MIN_DIGITS: AtomicU32 = AtomicU32::new(7);
-    static ref MIN_PROB: AtomicU64 = AtomicU64::new(100);
+    static ref MIN_PROB: AtomicU64 = AtomicU64::new(100); // 0.01
 }
 
 const TARGET_TIME: f64 = 10.0;
@@ -171,7 +171,7 @@ fn adjust_difficulty(duration: f64) {
 
 // Handlers com ApiKey
 async fn mine_handler(
-    ApiKey(_): ApiKey,
+    ApiKey(_key): ApiKey,  // ← Agora funciona!
     axum::extract::State(chain): axum::extract::State<Arc<Mutex<Vec<Block>>>>,
 ) -> Json<serde_json::Value> {
     let last_block = {
@@ -214,7 +214,7 @@ async fn mine_handler(
 }
 
 async fn chain_handler(
-    ApiKey(_): ApiKey,
+    ApiKey(_key): ApiKey,  // ← Agora funciona!
     axum::extract::State(chain): axum::extract::State<Arc<Mutex<Vec<Block>>>>,
 ) -> Json<Vec<Block>> {
     let guard = chain.lock().unwrap();
