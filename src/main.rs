@@ -1,7 +1,6 @@
 use axum::{routing::get, Router, Json};
 use serde::{Serialize, Deserialize};
 use shuttle_axum::ShuttleAxum;
-use shuttle_runtime::main;
 use std::sync::{Arc, Mutex};
 use rand::Rng;
 use std::time::Instant;
@@ -113,10 +112,11 @@ async fn mine_block_parallel(prev: Block, min_digits: u32, workers: usize) -> Bl
 }
 
 // ----------------------
-// Estado global da blockchain
+// Entry point com Shuttle
 // ----------------------
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
+    // Bloco gênese
     let genesis = Block {
         index: 0,
         prev_hash: "0".into(),
@@ -124,45 +124,46 @@ async fn axum() -> ShuttleAxum {
         a: 1, b: 1, c: 1, d: 1,
         hash: "genesis".into(),
     };
+
     let chain = Arc::new(Mutex::new(vec![genesis]));
 
     let router = Router::new()
-        .route("/", get(|| async { "🚀 Proof-of-Prime Blockchain Node" }))
+        .route("/", get(|| async { "Proof-of-Prime Blockchain Node" }))
         .route("/mine", get({
             let chain = chain.clone();
-            move || {
-                let chain = chain.clone();
-                async move {
-                    // Clona o último bloco sem segurar o mutex durante mineração
-                    let last_block = {
-                        let chain_lock = chain.lock().unwrap();
-                        chain_lock.last().unwrap().clone()
-                    };
+            move || async move {
+                // Clona o último bloco sem bloquear por muito tempo
+                let last_block = {
+                    let chain_lock = chain.lock().unwrap();
+                    chain_lock.last().unwrap().clone()
+                };
 
-                    let start = Instant::now();
-                    let new_block = mine_block_parallel(last_block, 7, 4).await;
-                    let duration = start.elapsed().as_secs_f64();
+                let start = Instant::now();
+                let new_block = mine_block_parallel(last_block, 7, 4).await;
+                let duration = start.elapsed().as_secs_f64();
 
+                // Adiciona o novo bloco
+                {
                     let mut chain_lock = chain.lock().unwrap();
                     chain_lock.push(new_block.clone());
-
-                    Json(serde_json::json!({
-                        "index": new_block.index,
-                        "prime": new_block.prime,
-                        "duration": duration,
-                        "height": chain_lock.len(),
-                    }))
                 }
+
+                Json(serde_json::json!({
+                    "index": new_block.index,
+                    "prime": new_block.prime,
+                    "duration": format!("{:.3}s", duration),
+                    "height": {
+                        let chain_lock = chain.lock().unwrap();
+                        chain_lock.len()
+                    }
+                }))
             }
         }))
         .route("/chain", get({
             let chain = chain.clone();
-            move || {
-                let chain = chain.clone();
-                async move {
-                    let chain_lock = chain.lock().unwrap();
-                    Json(&*chain_lock)
-                }
+            move || async move {
+                let chain_lock = chain.lock().unwrap();
+                Json(chain_lock.clone()) // CORRIGIDO: clone do vetor, não referência
             }
         }));
 
