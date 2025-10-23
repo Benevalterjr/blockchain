@@ -1,5 +1,5 @@
 use axum::{routing::get, Router, Json};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use shuttle_axum::ShuttleAxum;
 use std::sync::{Arc, Mutex};
 use rand::Rng;
@@ -7,9 +7,9 @@ use std::time::Instant;
 use tokio::task;
 use tokio::sync::mpsc;
 
-// ----------------------
-// Estrutura de bloco
-// ----------------------
+/// ----------------------
+/// Estrutura de bloco
+/// ----------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Block {
     index: u64,
@@ -22,9 +22,9 @@ struct Block {
     hash: String,
 }
 
-// ----------------------
-// Funções de primalidade
-// ----------------------
+/// ----------------------
+/// Funções de primalidade
+/// ----------------------
 fn miller_rabin(n: u64, k: u32) -> bool {
     if n < 2 { return false; }
     if n % 2 == 0 { return n == 2; }
@@ -67,9 +67,9 @@ fn mod_pow(mut base: u64, mut exp: u64, modu: u64) -> u64 {
     result
 }
 
-// ----------------------
-// Mineração simples de um bloco
-// ----------------------
+/// ----------------------
+/// Mineração simples de um bloco
+/// ----------------------
 fn mine_block(prev: &Block, min_digits: u32) -> Block {
     let mut rng = rand::thread_rng();
     loop {
@@ -85,16 +85,19 @@ fn mine_block(prev: &Block, min_digits: u32) -> Block {
                 index: prev.index + 1,
                 prev_hash: prev.hash.clone(),
                 prime: n,
-                a, b, c, d,
+                a,
+                b,
+                c,
+                d,
                 hash,
             };
         }
     }
 }
 
-// ----------------------
-// Mineração paralela com Tokio
-// ----------------------
+/// ----------------------
+/// Mineração paralela com Tokio
+/// ----------------------
 async fn mine_block_parallel(prev: Block, min_digits: u32, workers: usize) -> Block {
     let (tx, mut rx) = mpsc::channel::<Block>(1);
     let prev = Arc::new(prev);
@@ -111,9 +114,9 @@ async fn mine_block_parallel(prev: Block, min_digits: u32, workers: usize) -> Bl
     rx.recv().await.expect("Nenhum bloco minerado")
 }
 
-// ----------------------
-// Entry point com Shuttle
-// ----------------------
+/// ----------------------
+/// Entry point (Shuttle v0.50+)
+/// ----------------------
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
     // Bloco gênese
@@ -121,7 +124,10 @@ async fn axum() -> ShuttleAxum {
         index: 0,
         prev_hash: "0".into(),
         prime: 2,
-        a: 1, b: 1, c: 1, d: 1,
+        a: 1,
+        b: 1,
+        c: 1,
+        d: 1,
         hash: "genesis".into(),
     };
 
@@ -129,41 +135,50 @@ async fn axum() -> ShuttleAxum {
 
     let router = Router::new()
         .route("/", get(|| async { "Proof-of-Prime Blockchain Node" }))
+
+        // ---------- /mine ----------
         .route("/mine", get({
             let chain = chain.clone();
             move || async move {
-                // Clona o último bloco sem bloquear por muito tempo
+                // 1. Último bloco
                 let last_block = {
-                    let chain_lock = chain.lock().unwrap();
-                    chain_lock.last().unwrap().clone()
+                    let guard = chain.lock().unwrap();
+                    guard.last().unwrap().clone()
                 };
 
+                // 2. Mineração
                 let start = Instant::now();
                 let new_block = mine_block_parallel(last_block, 7, 4).await;
                 let duration = start.elapsed().as_secs_f64();
 
-                // Adiciona o novo bloco
+                // 3. Adiciona na chain
                 {
-                    let mut chain_lock = chain.lock().unwrap();
-                    chain_lock.push(new_block.clone());
+                    let mut guard = chain.lock().unwrap();
+                    guard.push(new_block.clone());
                 }
 
+                // 4. Calcula altura
+                let height = {
+                    let guard = chain.lock().unwrap();
+                    guard.len()
+                };
+
+                // 5. Resposta
                 Json(serde_json::json!({
                     "index": new_block.index,
                     "prime": new_block.prime,
                     "duration": format!("{:.3}s", duration),
-                    "height": {
-                        let chain_lock = chain.lock().unwrap();
-                        chain_lock.len()
-                    }
+                    "height": height
                 }))
             }
         }))
+
+        // ---------- /chain ----------
         .route("/chain", get({
             let chain = chain.clone();
             move || async move {
-                let chain_lock = chain.lock().unwrap();
-                Json(chain_lock.clone()) // CORRIGIDO: clone do vetor, não referência
+                let guard = chain.lock().unwrap();
+                Json(guard.clone())
             }
         }));
 
