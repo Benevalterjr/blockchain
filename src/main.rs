@@ -102,8 +102,8 @@ fn mine_block(prev: &Block, min_digits: u32) -> Block {
 // ----------------------
 // Estado global da blockchain
 // ----------------------
-#[main]
-async fn main() -> ShuttleAxum {
+#[shuttle_runtime::main]
+async fn axum() -> ShuttleAxum {
     let genesis = Block {
         index: 0,
         prev_hash: "0".into(),
