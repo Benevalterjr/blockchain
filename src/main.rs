@@ -7,7 +7,6 @@ use rand::Rng;
 use std::time::Instant;
 use tokio::task;
 use tokio::sync::mpsc;
-use std::collections::VecDeque;
 
 // ----------------------
 // Estrutura de bloco
@@ -106,19 +105,17 @@ async fn mine_block_parallel(prev: Block, min_digits: u32, workers: usize) -> Bl
         let prev = prev.clone();
         task::spawn_blocking(move || {
             let block = mine_block(&prev, min_digits);
-            // envia o bloco minerado pelo primeiro worker que terminar
             let _ = tx.blocking_send(block);
         });
     }
 
-    // Retorna o primeiro bloco minerado
     rx.recv().await.expect("Nenhum bloco minerado")
 }
 
 // ----------------------
 // Estado global da blockchain
 // ----------------------
-#[main]
+#[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
     let genesis = Block {
         index: 0,
@@ -136,11 +133,19 @@ async fn axum() -> ShuttleAxum {
             move || {
                 let chain = chain.clone();
                 async move {
-                    let mut chain_lock = chain.lock().unwrap();
+                    // Clona o último bloco sem segurar o mutex durante mineração
+                    let last_block = {
+                        let chain_lock = chain.lock().unwrap();
+                        chain_lock.last().unwrap().clone()
+                    };
+
                     let start = Instant::now();
-                    let new_block = mine_block_parallel(chain_lock.last().unwrap().clone(), 7, 4).await;
+                    let new_block = mine_block_parallel(last_block, 7, 4).await;
                     let duration = start.elapsed().as_secs_f64();
+
+                    let mut chain_lock = chain.lock().unwrap();
                     chain_lock.push(new_block.clone());
+
                     Json(serde_json::json!({
                         "index": new_block.index,
                         "prime": new_block.prime,
